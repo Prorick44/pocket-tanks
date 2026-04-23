@@ -18,7 +18,7 @@ export default function App() {
     scene: SCENE.PLAY,
     wind: (Math.random() * 2 - 1) * 0.2,
     aiLock: false,
-    didExplode: false, // ✅ FIX FLAG
+    didExplode: false,
     ui: {
       msg: null,
       msgUntil: 0,
@@ -87,11 +87,33 @@ export default function App() {
     }
   }
 
+  /* ========================= DIRECT HIT CHECK ========================= */
+
+  function checkDirectHit(g) {
+    const p = g.projectile;
+    if (!p) return null;
+
+    for (let t of g.tanks) {
+      const width = 20;
+      const height = 10;
+
+      if (
+        p.x > t.x - width &&
+        p.x < t.x + width &&
+        p.y > t.y - height &&
+        p.y < t.y + height
+      ) {
+        return t;
+      }
+    }
+    return null;
+  }
+
   /* ========================= EXPLOSION ========================= */
 
   function explode(x, y) {
     const e = engine();
-    e.didExplode = true; // ✅ mark explosion
+    e.didExplode = true;
 
     const g = e.state;
     const w = WEAPONS[g.weapon];
@@ -106,10 +128,8 @@ export default function App() {
     shake(12);
     notify(hit ? "Direct Hit!" : "Missed");
 
-    // explosion ring
     e.explosions.push({ x, y, r: 0, max: w.radius });
 
-    // particles
     for (let i = 0; i < 40; i++) {
       e.particles.push({
         x,
@@ -120,13 +140,11 @@ export default function App() {
       });
     }
 
-    // terrain deformation
     g.terrain = g.terrain.map((h, i) => {
       const d = Math.abs(i - x);
       return d < w.radius ? h + (w.radius - d) * 0.5 : h;
     });
 
-    // damage
     g.tanks.forEach((t) => {
       const d = Math.hypot(t.x - x, t.y - y);
       if (d < w.radius) {
@@ -155,11 +173,17 @@ export default function App() {
     if (e.scene !== SCENE.PLAY) return;
 
     if (g.projectile) {
-      e.didExplode = false; // reset flag
+      e.didExplode = false;
+
+      // ✅ CHECK MID-AIR HIT
+      const hitTank = checkDirectHit(g);
+      if (hitTank) {
+        explode(g.projectile.x, g.projectile.y);
+        return;
+      }
 
       const stillFlying = updateProjectile(g, explode);
 
-      // ✅ TRUE MISS ONLY (no explosion)
       if (!stillFlying && !g.projectile && !e.didExplode) {
         notify("Missed");
         nextTurn();
