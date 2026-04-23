@@ -18,6 +18,7 @@ export default function App() {
     scene: SCENE.PLAY,
     wind: (Math.random() * 2 - 1) * 0.2,
     aiLock: false,
+    didExplode: false, // ✅ FIX FLAG
     ui: {
       msg: null,
       msgUntil: 0,
@@ -90,6 +91,8 @@ export default function App() {
 
   function explode(x, y) {
     const e = engine();
+    e.didExplode = true; // ✅ mark explosion
+
     const g = e.state;
     const w = WEAPONS[g.weapon];
 
@@ -101,7 +104,7 @@ export default function App() {
     });
 
     shake(12);
-    notify(hit ? "Direct Hit!" : "Impact");
+    notify(hit ? "Direct Hit!" : "Missed");
 
     // explosion ring
     e.explosions.push({ x, y, r: 0, max: w.radius });
@@ -117,7 +120,7 @@ export default function App() {
       });
     }
 
-    // terrain
+    // terrain deformation
     g.terrain = g.terrain.map((h, i) => {
       const d = Math.abs(i - x);
       return d < w.radius ? h + (w.radius - d) * 0.5 : h;
@@ -152,10 +155,12 @@ export default function App() {
     if (e.scene !== SCENE.PLAY) return;
 
     if (g.projectile) {
+      e.didExplode = false; // reset flag
+
       const stillFlying = updateProjectile(g, explode);
 
-      // only true MISS
-      if (!stillFlying && !g.projectile) {
+      // ✅ TRUE MISS ONLY (no explosion)
+      if (!stillFlying && !g.projectile && !e.didExplode) {
         notify("Missed");
         nextTurn();
       }
@@ -270,7 +275,7 @@ export default function App() {
       ctx.fillText(`WIND ${g.wind.toFixed(2)}`, 20, 60);
       ctx.fillText(`WEAPON ${g.weapon === 0 ? "CANNON" : "MISSILE"}`, 20, 80);
 
-      // health
+      // health bars
       g.tanks.forEach((t, i) => {
         const x = i === 0 ? 300 : 900;
 
