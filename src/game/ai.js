@@ -1,68 +1,50 @@
-import { GRAVITY } from "./constants";
+export function aiTurn(g, fire) {
+  const ai = g.tanks[1];
+  const player = g.tanks[0];
 
-function simulateShot(game, angleDeg, power) {
-  const tank = game.tanks[1];
+  let best = {
+    angle: 45,
+    power: 10,
+    error: Infinity,
+  };
 
-  let x = tank.x;
-  let y = tank.y - 10;
+  // simulate shots
+  for (let a = 20; a <= 80; a += 2) {
+    for (let p = 6; p <= 20; p += 1) {
+      let sim = simulate(ai, a, p, g.wind);
 
-  let angle = (angleDeg * Math.PI) / 180;
+      let err = Math.abs(sim.x - player.x);
 
-  let vx = Math.cos(angle) * power;
-  let vy = -Math.sin(angle) * power;
-
-  for (let i = 0; i < 120; i++) {
-    vx += game.wind;
-    x += vx;
-    y += vy;
-    vy += GRAVITY;
-
-    if (x < 0 || x >= 1000) break;
-
-    const ix = Math.floor(x);
-    const ground = game.terrain[ix];
-
-    if (ground && y >= ground) {
-      return { x, y };
-    }
-  }
-
-  return { x, y };
-}
-
-function scoreHit(pos, player) {
-  const d = Math.hypot(pos.x - player.x, pos.y - player.y);
-  return d;
-}
-
-export function aiTurn(game, fire) {
-  if (game.winner) return;
-
-  const player = game.tanks[0];
-
-  let best = null;
-  let bestScore = Infinity;
-
-  // 🎯 TRY MULTIPLE SHOTS (SMART SEARCH)
-  for (let angle = 20; angle <= 80; angle += 5) {
-    for (let power = 8; power <= 20; power += 1) {
-      const hit = simulateShot(game, angle, power);
-      const score = scoreHit(hit, player);
-
-      if (score < bestScore) {
-        bestScore = score;
-        best = { angle, power };
+      if (err < best.error) {
+        best = { angle: a, power: p, error: err };
       }
     }
   }
 
-  if (!best) {
-    best = { angle: 45, power: 12 };
+  g.angle = best.angle;
+  g.power = best.power;
+
+  setTimeout(() => fire(), 400);
+}
+
+function simulate(tank, angle, power, wind) {
+  let a = ((180 - angle) * Math.PI) / 180;
+
+  let x = tank.x;
+  let y = tank.y;
+
+  let vx = Math.cos(a) * power;
+  let vy = -Math.sin(a) * power;
+
+  for (let i = 0; i < 120; i++) {
+    vx += wind;
+    vy += 0.2;
+
+    x += vx;
+    y += vy;
+
+    if (y > 600) break;
   }
 
-  // small randomness (human-like)
-  game.angle = best.angle + (Math.random() - 0.5) * 2;
-  game.power = best.power + (Math.random() - 0.5) * 0.5;
-
-  setTimeout(() => fire(), 500);
+  return { x, y };
 }

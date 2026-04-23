@@ -5,12 +5,7 @@ import { aiTurn } from "./game/ai";
 import { updateProjectile } from "./game/physics";
 import { draw } from "./game/renderer";
 
-/* =========================
-   🧠 GAME ENGINE CORE
-========================= */
-
 const SCENE = {
-  MENU: "menu",
   PLAY: "play",
   OVER: "over",
 };
@@ -24,43 +19,41 @@ export default function App() {
     wind: (Math.random() * 2 - 1) * 0.2,
     aiLock: false,
     ui: {
-      msg: "",
+      msg: null,
       msgUntil: 0,
       shake: 0,
     },
+    particles: [],
+    explosions: [],
   });
 
   const engine = () => engineRef.current;
-
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-  /* =========================
-     📢 EVENT SYSTEM
-  ========================= */
+  /* ========================= UI ========================= */
 
   function notify(text, time = 1200) {
-    engine().ui.msg = text;
-    engine().ui.msgUntil = Date.now() + time;
+    const ui = engine().ui;
+    ui.msg = text;
+    ui.msgUntil = Date.now() + time;
   }
 
-  function shake(val = 8) {
+  function shake(val = 10) {
     engine().ui.shake = val;
   }
 
-  /* =========================
-     🚀 FIRE SYSTEM
-  ========================= */
+  /* ========================= FIRE ========================= */
 
   function fire() {
     const e = engine();
     const g = e.state;
 
-    if (g.projectile || g.winner) return;
+    if (g.projectile || g.winner || g.turn === "locked") return;
 
-    const t = g.tanks[g.turn === "player" ? 0 : 1];
+    const isPlayer = g.turn === "player";
+    const t = g.tanks[isPlayer ? 0 : 1];
 
-    const angle =
-      ((g.turn === "player" ? g.angle : 180 - g.angle) * Math.PI) / 180;
+    const angle = ((isPlayer ? g.angle : 180 - g.angle) * Math.PI) / 180;
 
     g.projectile = {
       x: t.x,
@@ -69,20 +62,60 @@ export default function App() {
       vy: -Math.sin(angle) * g.power,
     };
 
-    g.trail = [];
+    g.lastTurn = isPlayer ? "player" : "ai";
+    g.turn = "locked";
   }
 
-  /* =========================
-     💥 IMPACT SYSTEM
-  ========================= */
+  /* ========================= TURN ========================= */
+
+  function nextTurn() {
+    const e = engine();
+    const g = e.state;
+
+    if (g.winner) return;
+
+    g.turn = g.lastTurn === "player" ? "ai" : "player";
+
+    if (g.turn === "ai" && !e.aiLock) {
+      e.aiLock = true;
+
+      setTimeout(() => {
+        aiTurn(g, fire);
+        e.aiLock = false;
+      }, 500);
+    }
+  }
+
+  /* ========================= EXPLOSION ========================= */
 
   function explode(x, y) {
     const e = engine();
     const g = e.state;
     const w = WEAPONS[g.weapon];
 
-    shake(10);
-    notify("Impact!", 900);
+    let hit = false;
+
+    g.tanks.forEach((t) => {
+      const d = Math.hypot(t.x - x, t.y - y);
+      if (d < w.radius) hit = true;
+    });
+
+    shake(12);
+    notify(hit ? "Direct Hit!" : "Impact");
+
+    // explosion ring
+    e.explosions.push({ x, y, r: 0, max: w.radius });
+
+    // particles
+    for (let i = 0; i < 40; i++) {
+      e.particles.push({
+        x,
+        y,
+        vx: (Math.random() - 0.5) * 6,
+        vy: (Math.random() - 0.5) * 6,
+        life: 40 + Math.random() * 20,
+      });
+    }
 
     // terrain
     g.terrain = g.terrain.map((h, i) => {
@@ -100,30 +133,17 @@ export default function App() {
 
     g.projectile = null;
 
-    // win
     if (g.tanks[0].health <= 0) g.winner = "AI";
     if (g.tanks[1].health <= 0) g.winner = "PLAYER";
 
-    // turn system (SAFE)
-    if (!g.winner) {
-      g.turn = g.turn === "player" ? "ai" : "player";
-
-      if (g.turn === "ai" && !e.aiLock) {
-        e.aiLock = true;
-
-        setTimeout(() => {
-          aiTurn(g, fire);
-          e.aiLock = false;
-        }, 500);
-      }
-    } else {
+    if (g.winner) {
       e.scene = SCENE.OVER;
+    } else {
+      nextTurn();
     }
   }
 
-  /* =========================
-     🔁 FIXED UPDATE LOOP
-  ========================= */
+  /* ========================= UPDATE ========================= */
 
   function update() {
     const e = engine();
@@ -132,13 +152,30 @@ export default function App() {
     if (e.scene !== SCENE.PLAY) return;
 
     if (g.projectile) {
-      updateProjectile(g, explode);
+      const stillFlying = updateProjectile(g, explode);
+
+      // only true MISS
+      if (!stillFlying && !g.projectile) {
+        notify("Missed");
+        nextTurn();
+      }
     }
+
+    // particles
+    e.particles.forEach((p) => {
+      p.vy += 0.2;
+      p.x += p.vx;
+      p.y += p.vy;
+      p.life--;
+    });
+    e.particles = e.particles.filter((p) => p.life > 0);
+
+    // explosions
+    e.explosions.forEach((ex) => (ex.r += 2));
+    e.explosions = e.explosions.filter((ex) => ex.r < ex.max);
   }
 
-  /* =========================
-     🎮 INPUT SYSTEM
-  ========================= */
+  /* ========================= INPUT ========================= */
 
   useEffect(() => {
     const key = (e) => {
@@ -147,13 +184,13 @@ export default function App() {
 
       if (eng.scene === SCENE.OVER && e.key === "r") {
         eng.state = initGame();
-        eng.wind = (Math.random() * 2 - 1) * 0.2;
         eng.scene = SCENE.PLAY;
-        notify("New Match Started");
+        eng.wind = (Math.random() * 2 - 1) * 0.2;
+        notify("New Match");
         return;
       }
 
-      if (g.turn !== "player" || g.projectile) return;
+      if (g.turn !== "player") return;
 
       if (e.key === "ArrowUp") g.angle += 2;
       if (e.key === "ArrowDown") g.angle -= 2;
@@ -165,12 +202,12 @@ export default function App() {
 
       if (e.key === "1") {
         g.weapon = 0;
-        notify("Cannon Selected");
+        notify("Cannon");
       }
 
       if (e.key === "2") {
         g.weapon = 1;
-        notify("Missile Selected");
+        notify("Missile");
       }
 
       if (e.key === " ") fire();
@@ -180,9 +217,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", key);
   }, []);
 
-  /* =========================
-     🎨 RENDER ENGINE
-  ========================= */
+  /* ========================= RENDER ========================= */
 
   useEffect(() => {
     const ctx = canvasRef.current.getContext("2d");
@@ -194,7 +229,6 @@ export default function App() {
       update();
       draw(ctx, g);
 
-      /* CAMERA SHAKE */
       let sx = 0,
         sy = 0;
 
@@ -207,86 +241,76 @@ export default function App() {
       ctx.save();
       ctx.translate(sx, sy);
 
-      /* HUD */
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(0, 0, WIDTH, 110);
+      // explosions
+      e.explosions.forEach((ex) => {
+        ctx.beginPath();
+        ctx.arc(ex.x, ex.y, ex.r, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255,150,0,${1 - ex.r / ex.max})`;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      });
+
+      // particles
+      e.particles.forEach((p) => {
+        ctx.fillStyle = `rgba(255, ${150 + Math.random() * 100}, 0, ${
+          p.life / 60
+        })`;
+        ctx.fillRect(p.x, p.y, 3, 3);
+      });
+
+      // HUD
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      ctx.fillRect(0, 0, WIDTH, 90);
 
       ctx.fillStyle = "white";
-      ctx.font = "13px monospace";
+      ctx.font = "12px monospace";
 
-      ctx.fillText(`ANGLE ${g.angle.toFixed(0)}°`, 20, 25);
-      ctx.fillText(`POWER ${g.power.toFixed(1)}`, 20, 45);
-      ctx.fillText(`WIND ${g.wind.toFixed(2)}`, 20, 65);
-      ctx.fillText(`WEAPON ${g.weapon === 0 ? "CANNON" : "MISSILE"}`, 20, 85);
+      ctx.fillText(`ANGLE ${g.angle.toFixed(0)}`, 20, 20);
+      ctx.fillText(`POWER ${g.power.toFixed(1)}`, 20, 40);
+      ctx.fillText(`WIND ${g.wind.toFixed(2)}`, 20, 60);
+      ctx.fillText(`WEAPON ${g.weapon === 0 ? "CANNON" : "MISSILE"}`, 20, 80);
 
-      /* HEALTH */
+      // health
       g.tanks.forEach((t, i) => {
-        const x = i === 0 ? 320 : 880;
+        const x = i === 0 ? 300 : 900;
 
-        ctx.fillStyle = "rgba(255,255,255,0.12)";
+        ctx.fillStyle = "#222";
         ctx.fillRect(x - 60, 20, 120, 10);
 
         ctx.fillStyle = t.health > 50 ? "#2ecc71" : "#e74c3c";
         ctx.fillRect(x - 60, 20, (t.health / 100) * 120, 10);
       });
 
-      /* TRAJECTORY */
-      if (!g.projectile && g.turn === "player") {
-        const t = g.tanks[0];
-
-        let a = (g.angle * Math.PI) / 180;
-        let x = t.x;
-        let y = t.y - 10;
-        let vx = Math.cos(a) * g.power;
-        let vy = -Math.sin(a) * g.power;
-
-        ctx.fillStyle = "rgba(255,255,0,0.8)";
-
-        for (let i = 0; i < 30; i++) {
-          vx += g.wind;
-          vy += 0.2;
-
-          x += vx;
-          y += vy;
-
-          ctx.fillRect(x, y, 2, 2);
-        }
-      }
-
-      /* MESSAGE */
+      // message
       const ui = e.ui;
-
       if (ui.msg && Date.now() < ui.msgUntil) {
-        const p = 1 - (ui.msgUntil - Date.now()) / 1200;
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(WIDTH / 2 - 120, 120, 240, 35);
 
-        ctx.fillStyle = "rgba(0,0,0,0.5)";
-        ctx.fillRect(WIDTH / 2 - 160, 130, 320, 40);
-
-        ctx.fillStyle = `rgba(255,255,255,${1 - p})`;
+        ctx.fillStyle = "white";
         ctx.textAlign = "center";
-        ctx.font = "14px Arial";
-        ctx.fillText(ui.msg, WIDTH / 2, 155);
+        ctx.fillText(ui.msg, WIDTH / 2, 143);
         ctx.textAlign = "start";
       }
 
-      /* GAME OVER */
+      // game over
       if (e.scene === SCENE.OVER) {
-        ctx.fillStyle = "rgba(0,0,0,0.85)";
+        ctx.fillStyle = "rgba(0,0,0,0.9)";
         ctx.fillRect(0, 0, WIDTH, 600);
 
         ctx.fillStyle = "white";
-        ctx.font = "42px Arial";
         ctx.textAlign = "center";
+
+        ctx.font = "40px Arial";
         ctx.fillText(`${g.winner} WINS`, WIDTH / 2, 260);
 
-        ctx.font = "18px Arial";
+        ctx.font = "16px Arial";
         ctx.fillText("Press R to Restart", WIDTH / 2, 300);
 
         ctx.textAlign = "start";
       }
 
       ctx.restore();
-
       requestAnimationFrame(loop);
     };
 
@@ -309,7 +333,7 @@ export default function App() {
         height={600}
         style={{
           borderRadius: "16px",
-          boxShadow: "0 0 80px rgba(0,0,0,0.95)",
+          boxShadow: "0 0 80px rgba(0,0,0,0.9)",
         }}
       />
     </div>
